@@ -21,9 +21,9 @@ func main() {
 		Handler: serveMux,
 	}
 	serveMux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
-	serveMux.HandleFunc("/healthz", readiness)
-	serveMux.HandleFunc("/metrics", cfg.requests)
-	serveMux.HandleFunc("/reset", cfg.reset)
+	serveMux.HandleFunc("GET /api/healthz", readiness)
+	serveMux.HandleFunc("GET /api/metrics", cfg.requests)
+	serveMux.HandleFunc("POST /api/reset", cfg.reset)
 	log.Fatal(server.ListenAndServe())
 }
 
