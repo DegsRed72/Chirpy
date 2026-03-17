@@ -1,21 +1,37 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/joho/godotenv"
+
+	"github.com/DegsRed72/Chirpy/internal/database"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	Queries        *database.Queries
 }
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		errors.New("Error opening sql")
+	}
+	dbQueries := database.New(db)
 	cfg := &apiConfig{
 		fileserverHits: atomic.Int32{},
+		Queries:        dbQueries,
 	}
 	serveMux := http.NewServeMux()
 	server := http.Server{
