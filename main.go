@@ -3,15 +3,19 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/joho/godotenv"
+
+	_ "github.com/lib/pq"
 
 	"github.com/DegsRed72/Chirpy/internal/database"
 )
@@ -20,13 +24,23 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	Queries        *database.Queries
 }
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
 
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	fmt.Println(dbURL)
+	if len(dbURL) == 0 {
+		log.Fatal("No dbURL")
+	}
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		errors.New("Error opening sql")
+		log.Fatal("Error opening sql")
 	}
 	dbQueries := database.New(db)
 	cfg := &apiConfig{
@@ -43,6 +57,7 @@ func main() {
 	serveMux.HandleFunc("GET /admin/metrics", cfg.requests)
 	serveMux.HandleFunc("POST /admin/reset", cfg.reset)
 	serveMux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	serveMux.HandleFunc("POST /api/users", cfg.makeUser)
 	log.Fatal(server.ListenAndServe())
 }
 
@@ -73,6 +88,7 @@ func (cfg *apiConfig) requests(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits = atomic.Int32{}
+	cfg.Queries.DeleteAllUsers(r.Context())
 }
 
 func validateChirp(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +123,7 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
+	w.Write([]byte(msg))
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
@@ -117,4 +134,30 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	}
 	w.WriteHeader(code)
 	w.Write([]byte(dat))
+}
+
+func (cfg *apiConfig) makeUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error decoding parameters: %s", err))
+		return
+	}
+
+	DBuser, err := cfg.Queries.CreateUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error creating user: %s", err))
+		return
+	}
+	user := User{
+		ID:        DBuser.ID,
+		CreatedAt: DBuser.CreatedAt,
+		UpdatedAt: DBuser.UpdatedAt,
+		Email:     DBuser.Email,
+	}
+	respondWithJSON(w, 201, user)
 }
