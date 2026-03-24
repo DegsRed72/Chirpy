@@ -30,11 +30,17 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
 }
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
 
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
-	fmt.Println(dbURL)
 	if len(dbURL) == 0 {
 		log.Fatal("No dbURL")
 	}
@@ -56,7 +62,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/healthz", readiness)
 	serveMux.HandleFunc("GET /admin/metrics", cfg.requests)
 	serveMux.HandleFunc("POST /admin/reset", cfg.reset)
-	serveMux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	serveMux.HandleFunc("POST /api/chirps", makeChirp)
 	serveMux.HandleFunc("POST /api/users", cfg.makeUser)
 	log.Fatal(server.ListenAndServe())
 }
@@ -91,9 +97,10 @@ func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
 	cfg.Queries.DeleteAllUsers(r.Context())
 }
 
-func validateChirp(w http.ResponseWriter, r *http.Request) {
+func makeChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -115,10 +122,11 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	respBody = strings.Join(words, " ")
-	type cleaned struct {
-		CleanedBody string `json:"cleaned_body"`
+	type cleanedchirp struct {
+		CleanedBody string    `json:"body"`
+		UserID      uuid.UUID `json:"user_id"`
 	}
-	respondWithJSON(w, 200, cleaned{CleanedBody: respBody})
+	respondWithJSON(w, 201, cleanedchirp{CleanedBody: respBody, UserID: params.UserID})
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
