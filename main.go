@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -61,8 +62,10 @@ func main() {
 	serveMux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serveMux.HandleFunc("GET /api/healthz", readiness)
 	serveMux.HandleFunc("GET /admin/metrics", cfg.requests)
+	serveMux.HandleFunc("GET /api/chirps", cfg.getChirps)
+	serveMux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	serveMux.HandleFunc("POST /admin/reset", cfg.reset)
-	serveMux.HandleFunc("POST /api/chirps", makeChirp)
+	serveMux.HandleFunc("POST /api/chirps", cfg.makeChirp)
 	serveMux.HandleFunc("POST /api/users", cfg.makeUser)
 	log.Fatal(server.ListenAndServe())
 }
@@ -97,7 +100,7 @@ func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
 	cfg.Queries.DeleteAllUsers(r.Context())
 }
 
-func makeChirp(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) makeChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body   string    `json:"body"`
 		UserID uuid.UUID `json:"user_id"`
@@ -122,11 +125,23 @@ func makeChirp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	respBody = strings.Join(words, " ")
-	type cleanedchirp struct {
-		CleanedBody string    `json:"body"`
-		UserID      uuid.UUID `json:"user_id"`
+
+	dbChirp, err := cfg.Queries.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   respBody,
+		UserID: params.UserID,
+	})
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error making Chirp: ", err))
 	}
-	respondWithJSON(w, 201, cleanedchirp{CleanedBody: respBody, UserID: params.UserID})
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+
+	respondWithJSON(w, 201, chirp)
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -168,4 +183,51 @@ func (cfg *apiConfig) makeUser(w http.ResponseWriter, r *http.Request) {
 		Email:     DBuser.Email,
 	}
 	respondWithJSON(w, 201, user)
+}
+
+func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
+	chirps := []Chirp{}
+	dbChirps, err := cfg.Queries.GetAllChirps(r.Context())
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error getting chirps: %s", err))
+		return
+	}
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body:      dbChirp.Body,
+			UserID:    dbChirp.UserID,
+		})
+	}
+
+	respondWithJSON(w, 200, chirps)
+}
+
+func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Invalid chirp ID: %s", err))
+		return
+	}
+	dbChirp, err := cfg.Queries.GetChirp(r.Context(), chirpID)
+	if errors.Is(err, sql.ErrNoRows) {
+		respondWithError(w, 404, fmt.Sprintf("Chirp not found: %s", err))
+		return
+	}
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error getting Chirp: %s", err))
+		return
+	}
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+	respondWithJSON(w, 200, chirp)
+
 }

@@ -1,0 +1,23 @@
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "test@example.com"
+}
+
+###
+
+POST http://localhost:8080/api/chirps
+Content-Type: application/json
+
+{
+  "body": "Hello world",
+  "user_id": "56cdd379-b791-4202-8f08-e8f14ea6147f"
+}
+
+###
+
+GET http://localhost:8080/api/chirps
+
+###
+POST http://localhost:8080/admin/reset
