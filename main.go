@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/DegsRed72/Chirpy/internal/auth"
+
 	"github.com/google/uuid"
 
 	"github.com/joho/godotenv"
@@ -26,10 +28,11 @@ type apiConfig struct {
 	Queries        *database.Queries
 }
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID             uuid.UUID `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Email          string    `json:"email"`
+	HashedPassword string    `json:"password"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -67,6 +70,7 @@ func main() {
 	serveMux.HandleFunc("POST /admin/reset", cfg.reset)
 	serveMux.HandleFunc("POST /api/chirps", cfg.makeChirp)
 	serveMux.HandleFunc("POST /api/users", cfg.makeUser)
+	serveMux.HandleFunc("POST /api/login", cfg.login)
 	log.Fatal(server.ListenAndServe())
 }
 
@@ -161,7 +165,8 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 
 func (cfg *apiConfig) makeUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -170,17 +175,21 @@ func (cfg *apiConfig) makeUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 400, fmt.Sprintf("Error decoding parameters: %s", err))
 		return
 	}
-
-	DBuser, err := cfg.Queries.CreateUser(r.Context(), params.Email)
+	pass, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error hashing password: %s", err))
+	}
+	DBuser, err := cfg.Queries.CreateUser(r.Context(), database.CreateUserParams{Email: params.Email, HashedPassword: pass})
 	if err != nil {
 		respondWithError(w, 400, fmt.Sprintf("Error creating user: %s", err))
 		return
 	}
 	user := User{
-		ID:        DBuser.ID,
-		CreatedAt: DBuser.CreatedAt,
-		UpdatedAt: DBuser.UpdatedAt,
-		Email:     DBuser.Email,
+		ID:             DBuser.ID,
+		CreatedAt:      DBuser.CreatedAt,
+		UpdatedAt:      DBuser.UpdatedAt,
+		Email:          DBuser.Email,
+		HashedPassword: DBuser.HashedPassword,
 	}
 	respondWithJSON(w, 201, user)
 }
@@ -229,5 +238,37 @@ func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 		UserID:    dbChirp.UserID,
 	}
 	respondWithJSON(w, 200, chirp)
+
+}
+
+func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error decoding parameters: %s", err))
+		return
+	}
+	dbUser, err := cfg.Queries.GetUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, 401, "Email not found")
+		return
+	}
+	match, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	if match == true {
+		user := User{
+			ID:        dbUser.ID,
+			CreatedAt: dbUser.CreatedAt,
+			UpdatedAt: dbUser.UpdatedAt,
+			Email:     dbUser.Email,
+		}
+		respondWithJSON(w, 200, user)
+	} else {
+		respondWithError(w, 401, "Email or Password does not match")
+	}
 
 }
