@@ -32,7 +32,7 @@ type User struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	Email          string    `json:"email"`
-	HashedPassword string    `json:"password"`
+	HashedPassword string    `json:"-"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -135,7 +135,7 @@ func (cfg *apiConfig) makeChirp(w http.ResponseWriter, r *http.Request) {
 		UserID: params.UserID,
 	})
 	if err != nil {
-		respondWithError(w, 400, fmt.Sprintf("Error making Chirp: ", err))
+		respondWithError(w, 400, fmt.Sprintf("Error making Chirp: %s", err))
 	}
 	chirp := Chirp{
 		ID:        dbChirp.ID,
@@ -185,11 +185,10 @@ func (cfg *apiConfig) makeUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{
-		ID:             DBuser.ID,
-		CreatedAt:      DBuser.CreatedAt,
-		UpdatedAt:      DBuser.UpdatedAt,
-		Email:          DBuser.Email,
-		HashedPassword: DBuser.HashedPassword,
+		ID:        DBuser.ID,
+		CreatedAt: DBuser.CreatedAt,
+		UpdatedAt: DBuser.UpdatedAt,
+		Email:     DBuser.Email,
 	}
 	respondWithJSON(w, 201, user)
 }
@@ -259,6 +258,11 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	match, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("Error comparing Hash and Password: %s", err))
+		return
+	}
+	fmt.Printf("DEBUG match: %v, err: %v\n", match, err)
 	if match == true {
 		user := User{
 			ID:        dbUser.ID,

@@ -2,9 +2,16 @@ POST http://localhost:8080/api/users
 Content-Type: application/json
 
 {
-  "email": "test@example.com"
+  "email": "test@example.com",
+  "password": "123456"
 }
 
+###
+POST http://localhost:8080/api/login
+{
+  "email": "test@example.com",
+  "password": "123456"
+}
 ###
 
 POST http://localhost:8080/api/chirps
