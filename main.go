@@ -26,6 +26,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	Queries        *database.Queries
+	Secret         string
 }
 type User struct {
 	ID             uuid.UUID `json:"id"`
@@ -33,6 +34,7 @@ type User struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 	Email          string    `json:"email"`
 	HashedPassword string    `json:"-"`
+	Token          string    `json:"token"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -48,6 +50,7 @@ func main() {
 	if len(dbURL) == 0 {
 		log.Fatal("No dbURL")
 	}
+	secret := os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal("Error opening sql")
@@ -56,6 +59,7 @@ func main() {
 	cfg := &apiConfig{
 		fileserverHits: atomic.Int32{},
 		Queries:        dbQueries,
+		Secret:         secret,
 	}
 	serveMux := http.NewServeMux()
 	server := http.Server{
@@ -106,12 +110,21 @@ func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) makeChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
+	}
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.Secret)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, 400, fmt.Sprintf("Error decoding parameters: %s", err))
 		return
@@ -129,10 +142,9 @@ func (cfg *apiConfig) makeChirp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	respBody = strings.Join(words, " ")
-
 	dbChirp, err := cfg.Queries.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   respBody,
-		UserID: params.UserID,
+		UserID: userID,
 	})
 	if err != nil {
 		respondWithError(w, 400, fmt.Sprintf("Error making Chirp: %s", err))
@@ -242,8 +254,9 @@ func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -257,18 +270,23 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Email not found")
 		return
 	}
+	experationTime := params.ExpiresInSeconds
+	if experationTime == 0 || experationTime > 3600 {
+		experationTime = 3600
+	}
+	token, err := auth.MakeJWT(dbUser.ID, cfg.Secret, time.Duration(experationTime*int(time.Second)))
 	match, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
 		respondWithError(w, 401, fmt.Sprintf("Error comparing Hash and Password: %s", err))
 		return
 	}
-	fmt.Printf("DEBUG match: %v, err: %v\n", match, err)
 	if match == true {
 		user := User{
 			ID:        dbUser.ID,
 			CreatedAt: dbUser.CreatedAt,
 			UpdatedAt: dbUser.UpdatedAt,
 			Email:     dbUser.Email,
+			Token:     token,
 		}
 		respondWithJSON(w, 200, user)
 	} else {
