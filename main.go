@@ -68,6 +68,7 @@ func main() {
 		Handler: serveMux,
 	}
 	serveMux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
+	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteChirp)
 	serveMux.HandleFunc("GET /api/healthz", readiness)
 	serveMux.HandleFunc("GET /admin/metrics", cfg.requests)
 	serveMux.HandleFunc("GET /api/chirps", cfg.getChirps)
@@ -78,6 +79,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/login", cfg.login)
 	serveMux.HandleFunc("POST /api/refresh", cfg.refresh)
 	serveMux.HandleFunc("POST /api/revoke", cfg.revoke)
+	serveMux.HandleFunc("PUT /api/users", cfg.updateEmailPassword)
 	log.Fatal(server.ListenAndServe())
 }
 
@@ -325,5 +327,51 @@ func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.Queries.RevokeRefreshToken(r.Context(), token)
 	respondWithJSON(w, 204, nil)
+
+}
+func (cfg *apiConfig) updateEmailPassword(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error decoding parameters: %s", err))
+		return
+	}
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.Secret)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
+	newPass, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("Error hashing password: %s", err))
+		return
+	}
+
+	cfg.Queries.UpdateEmailAndPassword(r.Context(), database.UpdateEmailAndPasswordParams{Email: params.Email, HashedPassword: newPass, ID: userID})
+	dbUser, err := cfg.Queries.GetUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
+	respondWithJSON(w, 200, User{ID: dbUser.ID, CreatedAt: dbUser.CreatedAt, UpdatedAt: dbUser.UpdatedAt, Email: dbUser.Email})
+}
+
+func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Invalid chirp ID: %s", err))
+		return
+	}
 
 }
