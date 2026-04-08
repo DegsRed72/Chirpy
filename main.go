@@ -35,6 +35,7 @@ type User struct {
 	Email          string    `json:"email"`
 	HashedPassword string    `json:"-"`
 	Token          string    `json:"token"`
+	RefreshToken   string    `json:"refresh_token"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -75,6 +76,8 @@ func main() {
 	serveMux.HandleFunc("POST /api/chirps", cfg.makeChirp)
 	serveMux.HandleFunc("POST /api/users", cfg.makeUser)
 	serveMux.HandleFunc("POST /api/login", cfg.login)
+	serveMux.HandleFunc("POST /api/refresh", cfg.refresh)
+	serveMux.HandleFunc("POST /api/revoke", cfg.revoke)
 	log.Fatal(server.ListenAndServe())
 }
 
@@ -254,9 +257,8 @@ func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -270,11 +272,9 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Email not found")
 		return
 	}
-	experationTime := params.ExpiresInSeconds
-	if experationTime == 0 || experationTime > 3600 {
-		experationTime = 3600
-	}
-	token, err := auth.MakeJWT(dbUser.ID, cfg.Secret, time.Duration(experationTime*int(time.Second)))
+	accessToken, err := auth.MakeJWT(dbUser.ID, cfg.Secret, time.Duration(int(time.Hour)))
+	refreshToken := auth.MakeRefreshToken()
+	cfg.Queries.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{Token: refreshToken, UserID: dbUser.ID})
 	match, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
 		respondWithError(w, 401, fmt.Sprintf("Error comparing Hash and Password: %s", err))
@@ -282,15 +282,48 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if match == true {
 		user := User{
-			ID:        dbUser.ID,
-			CreatedAt: dbUser.CreatedAt,
-			UpdatedAt: dbUser.UpdatedAt,
-			Email:     dbUser.Email,
-			Token:     token,
+			ID:           dbUser.ID,
+			CreatedAt:    dbUser.CreatedAt,
+			UpdatedAt:    dbUser.UpdatedAt,
+			Email:        dbUser.Email,
+			Token:        accessToken,
+			RefreshToken: refreshToken,
 		}
 		respondWithJSON(w, 200, user)
 	} else {
 		respondWithError(w, 401, "Email or Password does not match")
 	}
+
+}
+
+func (cfg *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
+	refreshToken, err := cfg.Queries.GetUserFromRefreshToken(r.Context(), token)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("token not found: %s", err))
+		return
+	}
+	if refreshToken.ExpiresAt.Before(time.Now()) || refreshToken.RevokedAt.Valid {
+		respondWithError(w, 401, "token expired or revoked")
+		return
+	}
+	accessToken, err := auth.MakeJWT(refreshToken.UserID, cfg.Secret, time.Hour)
+	type Response struct {
+		Token string `json:"token"`
+	}
+	respondWithJSON(w, 200, Response{Token: accessToken})
+}
+func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("%s", err))
+		return
+	}
+	cfg.Queries.RevokeRefreshToken(r.Context(), token)
+	respondWithJSON(w, 204, nil)
 
 }
