@@ -36,6 +36,7 @@ type User struct {
 	HashedPassword string    `json:"-"`
 	Token          string    `json:"token"`
 	RefreshToken   string    `json:"refresh_token"`
+	IsChirpyRed    bool      `json:"is_chirpy_red"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -79,6 +80,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/login", cfg.login)
 	serveMux.HandleFunc("POST /api/refresh", cfg.refresh)
 	serveMux.HandleFunc("POST /api/revoke", cfg.revoke)
+	serveMux.HandleFunc("POST /api/polka/webhooks", cfg.upgradeToRed)
 	serveMux.HandleFunc("PUT /api/users", cfg.updateEmailPassword)
 	log.Fatal(server.ListenAndServe())
 }
@@ -202,10 +204,11 @@ func (cfg *apiConfig) makeUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{
-		ID:        DBuser.ID,
-		CreatedAt: DBuser.CreatedAt,
-		UpdatedAt: DBuser.UpdatedAt,
-		Email:     DBuser.Email,
+		ID:          DBuser.ID,
+		CreatedAt:   DBuser.CreatedAt,
+		UpdatedAt:   DBuser.UpdatedAt,
+		Email:       DBuser.Email,
+		IsChirpyRed: DBuser.IsChirpyRed.Bool,
 	}
 	respondWithJSON(w, 201, user)
 }
@@ -290,6 +293,7 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 			Email:        dbUser.Email,
 			Token:        accessToken,
 			RefreshToken: refreshToken,
+			IsChirpyRed:  dbUser.IsChirpyRed.Bool,
 		}
 		respondWithJSON(w, 200, user)
 	} else {
@@ -401,5 +405,36 @@ func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondWithJSON(w, 204, "Deletion successful")
+
+}
+
+func (cfg *apiConfig) upgradeToRed(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID uuid.UUID `json:"user_id"`
+		}
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error decoding parameters: %s", err))
+		return
+	}
+	APIKey, err := auth.GetAPIKey(r.Header)
+	if APIKey != os.Getenv("POLKA_KEY") {
+		respondWithError(w, 401, "Not authorized")
+	}
+	if params.Event != "user.upgraded" {
+		respondWithJSON(w, 204, nil)
+		return
+	}
+	err = cfg.Queries.UpgradeToChirpyRed(r.Context(), params.Data.UserID)
+	if err != nil {
+		respondWithError(w, 404, fmt.Sprintf("User not found: %s", err))
+		return
+	}
+	respondWithJSON(w, 204, nil)
 
 }
