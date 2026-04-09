@@ -357,7 +357,10 @@ func (cfg *apiConfig) updateEmailPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cfg.Queries.UpdateEmailAndPassword(r.Context(), database.UpdateEmailAndPasswordParams{Email: params.Email, HashedPassword: newPass, ID: userID})
+	err = cfg.Queries.UpdateEmailAndPassword(r.Context(), database.UpdateEmailAndPasswordParams{Email: params.Email, HashedPassword: newPass, ID: userID})
+	if err != nil {
+		respondWithError(w, 400, fmt.Sprintf("Error updating email and password: %s", err))
+	}
 	dbUser, err := cfg.Queries.GetUser(r.Context(), params.Email)
 	if err != nil {
 		respondWithError(w, 401, fmt.Sprintf("%s", err))
@@ -367,11 +370,36 @@ func (cfg *apiConfig) updateEmailPassword(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.Secret)
+	if err != nil {
+		respondWithError(w, 401, fmt.Sprintf("%s", err))
+		return
+	}
 	chirpIDStr := r.PathValue("chirpID")
 	chirpID, err := uuid.Parse(chirpIDStr)
 	if err != nil {
 		respondWithError(w, 400, fmt.Sprintf("Invalid chirp ID: %s", err))
 		return
 	}
+	dbChirp, err := cfg.Queries.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, 404, "Chirp not found")
+		return
+	}
+	if dbChirp.UserID == userID {
+		err = cfg.Queries.DeleteChirp(r.Context(), chirpID)
+		if err != nil {
+			respondWithError(w, 400, fmt.Sprintf("Error deleting chirp: %s", err))
+		}
+	} else {
+		respondWithError(w, 403, "Not authorized to delete Chirp")
+		return
+	}
+	respondWithJSON(w, 204, "Deletion successful")
 
 }
